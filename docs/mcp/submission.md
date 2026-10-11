@@ -13,7 +13,7 @@ The existing portal draft is [Typerelay](https://platform.openai.com/plugins/man
 
 Deploy the reviewed server/MCP release through the existing production process. Keep `/mcp` unchanged. In the existing `mcp.typerelay.com` Caddy site block, add this response before `import upstream_typerelay_mcp`:
 
-```caddy
+```text
 respond /.well-known/openai-apps-challenge "EnkJMf8o0lCqV5WF3PWW1VHe-5I8jUwAB3zvto0JDsI" 200
 ```
 
