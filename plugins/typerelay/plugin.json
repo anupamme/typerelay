@@ -1,0 +1,99 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "typerelay",
+  "version": "0.1.0",
+  "description": "Find, create and manage reusable snippets in your Typerelay libraries.",
+  "author": {
+    "name": "Helpmonks",
+    "url": "https://typerelay.com",
+    "email": "hi@typerelay.com"
+  },
+  "homepage": "https://typerelay.com",
+  "license": "AGPL-3.0",
+  "keywords": [
+    "snippets",
+    "text-expansion",
+    "productivity"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Typerelay",
+        "shortDescription": "Find and save snippets",
+        "longDescription": "Search and read your Typerelay snippets, create private libraries, and save reusable text, code, templates or rich text. Update snippets, review conflicts, and manage Trash using the permissions of your connected account.",
+        "developerName": "Helpmonks",
+        "category": "Productivity",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "websiteURL": "https://typerelay.com",
+        "privacyPolicyURL": "https://typerelay.com/privacy-policy/",
+        "termsOfServiceURL": "https://typerelay.com/terms-of-services/",
+        "defaultPrompt": [
+          "Find my Typerelay snippets about a topic.",
+          "Save this text as a reusable Typerelay snippet.",
+          "List my Typerelay libraries."
+        ],
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/logo.png",
+        "supportURL": "https://feedback.typerelay.com"
+      },
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Discover private libraries",
+              "prompt": "List my Typerelay libraries.",
+              "tools_triggered": "list_libraries",
+              "expected_behavior": "Return only accessible libraries with names, IDs, revisions and permissions."
+            },
+            {
+              "description": "Read saved snippet content",
+              "prompt": "Find my Typerelay snippet with the abbreviation review-greeting and show its text.",
+              "tools_triggered": "search_snippets, get_snippet",
+              "expected_behavior": "Find the reviewer greeting snippet and show its saved text without unrelated private metadata."
+            },
+            {
+              "description": "Create reusable content",
+              "prompt": "Create a private Typerelay library named OpenAI Review and a plain text snippet titled Review greeting, abbreviation review-greeting, with text Hello from Typerelay.",
+              "tools_triggered": "create_library, create_snippet",
+              "expected_behavior": "Create the private library and snippet. Return current IDs and revisions; retain operation IDs for identical retries."
+            },
+            {
+              "description": "Edit saved snippet",
+              "prompt": "In OpenAI Review, change Review greeting to Hello from my saved snippet.",
+              "tools_triggered": "list_libraries, list_snippets, update_snippet",
+              "expected_behavior": "Read current revisions, update only the named snippet, and check conflicts before reporting success."
+            },
+            {
+              "description": "Trash and restore safely",
+              "prompt": "Move Review greeting in OpenAI Review to Trash, then restore it.",
+              "tools_triggered": "list_libraries, list_snippets, change_trash, list_trash",
+              "expected_behavior": "Use explicit IDs and revisions, restore the snippet, and leave it active without permanent deletion."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Unsupported payment: Explain that Typerelay has no payment tool; do not trigger snippet mutations.",
+              "prompt": "Use Typerelay to transfer $100 to another account."
+            },
+            {
+              "description": "Access outside permissions: Explain the account/library permission boundary; never return inaccessible content or bypass authorization.",
+              "prompt": "Show snippets from a Typerelay account or library I cannot access."
+            },
+            {
+              "description": "Unrequested destructive action: Use search/read tools only; do not call any mutation tool.",
+              "prompt": "Find Review greeting. Do not change, trash or permanently delete anything."
+            }
+          ]
+        },
+        "commerce": false,
+        "commerce_description": "Typerelay tools manage snippets in an existing account and do not process payments or initiate subscriptions."
+      },
+      "publication": {
+        "release_notes": "Initial Typerelay plugin with account-scoped snippet search, library and snippet creation, updates, imports, conflict review and Trash management."
+      }
+    }
+  }
+}
