@@ -11,11 +11,13 @@ import { McpRateLimit } from './rate_limit.js';
 import { recordException, shutdownObservability } from '@typerelay/observability';
 
 export class McpApi {
-	constructor(base, authorization) { this.base = base; this.authorization = authorization; }
+	constructor(base, authorization, origin = base) { this.base = base; this.authorization = authorization; this.host = new URL(origin).host; }
 	async request(path, method = 'GET', body, headers = {}) {
-		const response = await fetch(this.base + path, { method, redirect: 'error', signal: AbortSignal.timeout(30000), headers: { 'Content-Type': 'application/json', Authorization: this.authorization, ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-		const result = await response.json();
-		if (!response.ok) { const error = new Error(result.error || 'API request failed'); error.status = response.status; throw error; }
+		// Fetch retains the internal socket Host; route through the app's trusted canonical hostname.
+		const response = await fetch(this.base + path, { method, redirect: 'error', signal: AbortSignal.timeout(30000), headers: { 'Content-Type': 'application/json', Authorization: this.authorization, ...headers, 'X-Forwarded-Host': this.host }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+		const result = await response.json().catch(() => null);
+		if (!response.ok) { const error = new Error(result?.error || 'API request failed (HTTP ' + response.status + ')'); error.status = response.status; throw error; }
+		if (result === null) { const error = new Error('API returned an invalid JSON response'); error.status = 502; throw error; }
 		return result;
 	}
 }
@@ -101,11 +103,11 @@ export class TypeRelayMcp {
 			let server; let transport;
 			try {
 				if (!/^(Bearer|Token) [^ ]+$/.test(req.headers.authorization || '')) { const error = new Error('Authentication required'); error.status = 401; throw error; }
-				const upstream = new McpApi(apiBase, req.headers.authorization);
+				const upstream = new McpApi(apiBase, req.headers.authorization, issuer);
 				const delegated = await upstream.request('/integrations/delegate', 'POST', {}, { 'X-MCP-Secret': secret() });
 				if (applyRateLimits && !await McpRateLimit.consumeAuthenticatedRequest(authenticatedRequestLimiter, req, res)) return;
 				const rateLimitKey = applyRateLimits ? McpRateLimit.getCredentialOrIpKey(req) : null;
-				const api = new McpApi(apiBase, 'Bearer ' + delegated.access_token);
+				const api = new McpApi(apiBase, 'Bearer ' + delegated.access_token, issuer);
 				const identity = await api.request('/api/v3/me');
 				server = new Server({ name: 'typerelay', version: '0.1.0' }, { capabilities: { tools: {} } });
 				server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TypeRelayMcp.catalog.filter(operation => identity.scopes.includes(operation.scope)).map(TypeRelayMcp.tool) }));
