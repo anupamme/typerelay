@@ -223,7 +223,7 @@ export class Auth {
 		const client = await OAuthClient.findOne({ client_id: body.client_id }).lean();
 		Support.assert(client && client.redirects.includes(body.redirect_uri), 'Unregistered client or redirect');
 		Support.assert(body.response_type === 'code' && body.code_challenge_method === 'S256' && /^[A-Za-z0-9_-]{43}$/.test(body.code_challenge || ''), 'S256 PKCE required');
-		Support.assert(typeof body.state === 'string' && body.state.length >= 20 && body.state.length <= 256, 'Invalid state');
+		Support.assert(typeof body.state === 'string' && body.state.length >= 20 && Buffer.byteLength(body.state, 'utf8') <= 4096, 'Invalid state');
 		Support.assert([Auth.apiResource(), Auth.mcpResource()].includes(body.resource), 'Invalid resource');
 		const scopes = Auth.integrationScopes(typeof body.scope === 'string' ? body.scope.split(' ') : ['content:read']);
 		return { client, scopes };
