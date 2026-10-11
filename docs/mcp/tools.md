@@ -23,6 +23,20 @@ The list is generated from the API operation catalog and contains the operations
 
 <!--@include: ./tools-list.md-->
 
+## OpenAI app tools
+
+The `/mcp/app` endpoint preserves the content tools above except for these fixed-action replacements. It validates the advertised input schema and rejects caller-supplied `action` selectors. Permissions, revisions and operation IDs match the underlying API operation.
+
+| Existing `/mcp` tool | `/mcp/app` tool | Behavior |
+| --- | --- | --- |
+| `batch_snippets` | `move_snippets` | Move selected snippets; requires a destination library. |
+| `batch_snippets` | `trash_snippets` | Trash selected snippets; accepts no destination library. |
+| `change_trash` | `trash_item` | Trash one selected library or snippet. |
+| `change_trash` | `restore_item` | Restore one selected unexpired Trash item. |
+| `empty_trash` | `permanently_delete_trash_items` | Permanently delete only the explicitly supplied Trash targets and revisions. |
+
+The three replaced tool names cannot be called on `/mcp/app`. Restoration is annotated as a non-destructive write; moves, edits, Trash and permanent deletion are destructive writes. All tools operate on the connected account’s bounded private data.
+
 ## Use recovery tools carefully
 
 Trash and restore are distinct from permanent deletion. Review the selected records and their current revisions before acting, and use the dedicated purge scope only for deliberate permanent removal. The [Trash guide](../guide/trash) explains recovery behavior. For examples of organizing the content an assistant can retrieve, read [shared snippet libraries for teams](https://typerelay.com/blog/shared-snippet-library-for-teams-one-source-always-current/).

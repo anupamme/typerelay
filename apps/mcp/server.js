@@ -1,6 +1,7 @@
 // Streamable HTTP and API adapter pattern adapted from Mailtwine (AGPL-3.0).
 import express from 'express';
 import { pathToFileURL } from 'node:url';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -23,7 +24,18 @@ export class McpApi {
 }
 export class TypeRelayMcp {
 	static catalog = operations.filter(operation => operation.mcp);
+	static appCatalog = TypeRelayMcp.catalog.flatMap(operation => {
+		const replacements = { batch_snippets: [['move_snippets', 'move'], ['trash_snippets', 'trash']], change_trash: [['trash_item', 'trash'], ['restore_item', 'restore']], empty_trash: [['permanently_delete_trash_items']] }[operation.id];
+		return replacements ? replacements.map(([id, action]) => ({ ...operation, id, upstream: operation.id, action })) : [operation];
+	});
+	static validator = new AjvJsonSchemaValidator();
+	static validators = new Map();
 	static descriptions = {
+		move_snippets: 'Move an explicit selection of snippets between editable Typerelay libraries atomically. Supply source and destination library IDs, each snippet ID and its current revision. Does not trash snippets.',
+		trash_snippets: 'Move an explicit selection of snippets from an editable Typerelay library to Trash atomically. Supply the source library ID, each snippet ID and its current revision. Trash retains items for up to 30 days.',
+		trash_item: 'Move one explicit Typerelay library or snippet to Trash using its type, ID, library and current revision. Trash retains items for up to 30 days. Does not permanently delete the item.',
+		restore_item: 'Restore one explicit unexpired Typerelay library or snippet from Trash using its type, ID, library and current revision. Requires current restore permission. Preserves the item ID.',
+		permanently_delete_trash_items: 'Permanently delete only an explicit selection of Typerelay Trash items using each type, ID, library and current revision. Requires manage permission and trash:purge scope. Cannot be undone; does not implicitly empty all Trash.',
 		list_libraries: 'List libraries accessible to the connected TypeRelay account with current revisions and read, edit and manage permissions. Use returned IDs to select a library; page using next_cursor.',
 		get_library: 'Read metadata for one accessible TypeRelay library by ID, including revision, sharing grants and permissions. Use list_snippets to read its active snippets.',
 		create_library: 'Create a new private TypeRelay library with a name and optional snippets or YAML. Does not publish or share the library.',
@@ -68,74 +80,85 @@ export class TypeRelayMcp {
 		return TypeRelayMcp.project(result, { get_library: 'library', get_snippet: 'snippet', get_asset_metadata: 'asset' }[name] || 'result');
 	}
 	static tool(operation) {
-		const schema = operation.method === 'get' ? { type: 'object', properties: {}, required: [], additionalProperties: false } : structuredClone(ApiSchema.body(operation));
+		const schema = operation.method === 'get' ? { type: 'object', properties: {}, required: [], additionalProperties: false } : structuredClone(ApiSchema.body(operation.upstream ? { ...operation, id: operation.upstream } : operation));
+		if (operation.action) { delete schema.properties.action; schema.required = schema.required.filter(key => key !== 'action'); }
+		if (operation.id === 'move_snippets') schema.required.push('destination_library');
+		if (operation.id === 'trash_snippets') delete schema.properties.destination_library;
 		// Path arguments are nested so a new snippet's ID cannot shadow its library ID.
 		const path = [...operation.path.matchAll(/:([a-z_]+)/g)].map(match => match[1]);
 		if (path.length) { schema.properties.path = { type: 'object', properties: Object.fromEntries(path.map(name => [name, { type: 'string' }])), required: path, additionalProperties: false }; schema.required.push('path'); }
 		if (operation.id.startsWith('list_') || operation.id === 'search_snippets') Object.assign(schema.properties, { cursor: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 } });
 		if (operation.id === 'search_snippets') { schema.properties.q = { type: 'string', minLength: 1 }; schema.required.push('q'); }
-		return { name: operation.id, description: TypeRelayMcp.descriptions[operation.id] + ' Requires ' + operation.scope + '. ' + (operation.mutation ? 'Persist operation_id for identical retries; supply current revisions. Check returned conflicts before treating edits as accepted.' : ''), inputSchema: schema, annotations: { readOnlyHint: !operation.mutation, destructiveHint: operation.mutation && !['create_library', 'create_snippet', 'commit_import'].includes(operation.id), idempotentHint: true, openWorldHint: false }, securitySchemes: [{ type: 'oauth2', scopes: [operation.scope] }], _meta: { securitySchemes: [{ type: 'oauth2', scopes: [operation.scope] }] } };
+		return { name: operation.id, description: TypeRelayMcp.descriptions[operation.id] + ' Requires ' + operation.scope + '. ' + (operation.mutation ? 'Persist operation_id for identical retries; supply current revisions. Check returned conflicts before treating edits as accepted.' : ''), inputSchema: schema, annotations: { readOnlyHint: !operation.mutation, destructiveHint: operation.mutation && !['create_library', 'create_snippet', 'commit_import', 'restore_item'].includes(operation.id), idempotentHint: true, openWorldHint: false }, securitySchemes: [{ type: 'oauth2', scopes: [operation.scope] }], _meta: { securitySchemes: [{ type: 'oauth2', scopes: [operation.scope] }] } };
 	}
-	static async call(api, name, args) {
-		const operation = TypeRelayMcp.catalog.find(operation => operation.id === name);
+	static async call(api, name, args, catalog = TypeRelayMcp.catalog) {
+		const operation = catalog.find(operation => operation.id === name);
 		if (!operation) throw new Error('Unknown tool');
-		const body = { ...args }; delete body.path;
+		if (catalog === TypeRelayMcp.appCatalog) {
+			if (!TypeRelayMcp.validators.has(name)) TypeRelayMcp.validators.set(name, TypeRelayMcp.validator.getValidator(TypeRelayMcp.tool(operation).inputSchema));
+			const validation = TypeRelayMcp.validators.get(name)(args);
+			if (!validation.valid) throw new Error('Invalid tool arguments: ' + validation.errorMessage);
+		}
+		const body = { ...args, ...(operation.action ? { action: operation.action } : {}) }; delete body.path;
 		const path = operation.path.replace(/:([a-z_]+)/g, (match, key) => { if (typeof args.path?.[key] !== 'string' || !args.path[key]) throw new Error('Missing path.' + key); return encodeURIComponent(args.path[key]); });
 		const query = operation.method === 'get' ? new URLSearchParams(Object.entries(body).map(([key, value]) => [key, String(value)])) : null;
-		return TypeRelayMcp.response(name, await api.request('/api/v3' + path + (query?.size ? '?' + query : ''), operation.method.toUpperCase(), operation.method === 'get' ? undefined : body));
+		return TypeRelayMcp.response(operation.upstream || name, await api.request('/api/v3' + path + (query?.size ? '?' + query : ''), operation.method.toUpperCase(), operation.method === 'get' ? undefined : body));
 	}
 	static app({ apiBase = process.env.API_BASE_URL || 'http://localhost:3040', resource = (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + '/mcp', issuer = process.env.APP_URL || 'http://localhost:3040', secret = () => process.env.JWT_SECRET || 'change-me', applyRateLimits = true } = {}) {
 		const app = express();
 		if (process.env.IS_DOCKER === 'true') app.set('trust proxy', 1);
 		app.disable('x-powered-by');
 		const origin = new URL(resource).origin;
-		const metadata = origin + '/.well-known/oauth-protected-resource' + new URL(resource).pathname;
+		const surfaces = [{ path: '/mcp', resource, catalog: TypeRelayMcp.catalog }, { path: '/mcp/app', resource: resource + '/app', catalog: TypeRelayMcp.appCatalog }];
 		app.use((req, res, next) => {
 			if (req.headers.origin && ![origin, issuer, ...(process.env.MCP_ALLOWED_ORIGINS || '').split(',')].includes(req.headers.origin)) return res.status(403).json({ error: 'Invalid Origin' });
 			res.set('Cache-Control', 'no-store'); next();
 		});
 		app.get('/health', (req, res) => res.json({ ok: true, transport: 'streamable-http' }));
-		app.get(['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp'], (req, res) => res.json({ resource, authorization_servers: [issuer], scopes_supported: [...new Set(TypeRelayMcp.catalog.map(operation => operation.scope))], bearer_methods_supported: ['header'] }));
+		for (const surface of surfaces) app.get([...(surface.path === '/mcp' ? ['/.well-known/oauth-protected-resource'] : []), '/.well-known/oauth-protected-resource' + surface.path], (req, res) => res.json({ resource: surface.resource, authorization_servers: [issuer], scopes_supported: [...new Set(surface.catalog.map(operation => operation.scope))], bearer_methods_supported: ['header'] }));
 		if (applyRateLimits) { app.use(McpRateLimit.createIpFloodLimiter()); app.use(McpRateLimit.createUnauthLimiter()); }
 		const authenticatedRequestLimiter = applyRateLimits ? McpRateLimit.createAuthenticatedRequestLimiter() : null;
 		app.use(express.json({ limit: '12mb' }));
-		app.post('/mcp', async (req, res) => {
-			let server; let transport;
-			try {
-				if (!/^(Bearer|Token) [^ ]+$/.test(req.headers.authorization || '')) { const error = new Error('Authentication required'); error.status = 401; throw error; }
-				const upstream = new McpApi(apiBase, req.headers.authorization, issuer);
-				const delegated = await upstream.request('/integrations/delegate', 'POST', {}, { 'X-MCP-Secret': secret() });
-				if (applyRateLimits && !await McpRateLimit.consumeAuthenticatedRequest(authenticatedRequestLimiter, req, res)) return;
-				const rateLimitKey = applyRateLimits ? McpRateLimit.getCredentialOrIpKey(req) : null;
-				const api = new McpApi(apiBase, 'Bearer ' + delegated.access_token, issuer);
-				const identity = await api.request('/api/v3/me');
-				server = new Server({ name: 'typerelay', version: '0.1.0' }, { capabilities: { tools: {} } });
-				server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TypeRelayMcp.catalog.filter(operation => identity.scopes.includes(operation.scope)).map(TypeRelayMcp.tool) }));
-				server.setRequestHandler(CallToolRequestSchema, async request => {
-					try {
-						const operation = TypeRelayMcp.catalog.find(operation => operation.id === request.params.name);
-						if (!operation || !identity.scopes.includes(operation.scope)) throw new Error('Unknown tool or insufficient scope');
-						const args = request.params.arguments || {};
-						const run = () => TypeRelayMcp.call(api, request.params.name, args);
-						const result = applyRateLimits ? await McpRateLimit.runToolWithLimits({ toolName: request.params.name, args, rateLimitKey, run }) : await run();
-						if (result?.isError) return result;
-						return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
-					} catch (error) { return { isError: true, content: [{ type: 'text', text: error.message }], ...(error.status === 401 ? { _meta: { 'mcp/www_authenticate': ['Bearer resource_metadata="' + metadata + '", error="invalid_token", error_description="Sign in to TypeRelay again"'] } } : {}) }; }
-				});
-				transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-				res.on('close', () => { transport?.close(); server?.close(); });
-				await server.connect(transport);
-				// JSON-only clients need not advertise SSE, matching Mailtwine.
-				req.headers.accept = 'application/json, text/event-stream';
-				await transport.handleRequest(req, res, req.body);
-			} catch (error) {
-				if (res.headersSent) return;
-				if (!error.status || error.status >= 500) recordException(error);
-				if (error.status === 401) res.set('WWW-Authenticate', 'Bearer resource_metadata="' + metadata + '"');
-				res.status(error.status || 500).json({ error: error.status ? error.message : 'MCP request failed' });
-			}
-		});
-		app.all('/mcp', (req, res) => res.set('Allow', 'POST').status(405).json({ error: 'Use POST with Streamable HTTP' }));
+		for (const surface of surfaces) {
+			const metadata = origin + '/.well-known/oauth-protected-resource' + new URL(surface.resource).pathname;
+			app.post(surface.path, async (req, res) => {
+				let server; let transport;
+				try {
+					if (!/^(Bearer|Token) [^ ]+$/.test(req.headers.authorization || '')) { const error = new Error('Authentication required'); error.status = 401; throw error; }
+					const upstream = new McpApi(apiBase, req.headers.authorization, issuer);
+					const delegated = await upstream.request('/integrations/delegate', 'POST', { resource: surface.resource }, { 'X-MCP-Secret': secret() });
+					if (applyRateLimits && !await McpRateLimit.consumeAuthenticatedRequest(authenticatedRequestLimiter, req, res)) return;
+					const rateLimitKey = applyRateLimits ? McpRateLimit.getCredentialOrIpKey(req) : null;
+					const api = new McpApi(apiBase, 'Bearer ' + delegated.access_token, issuer);
+					const identity = await api.request('/api/v3/me');
+					server = new Server({ name: 'typerelay', version: '0.1.0' }, { capabilities: { tools: {} } });
+					server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: surface.catalog.filter(operation => identity.scopes.includes(operation.scope)).map(TypeRelayMcp.tool) }));
+					server.setRequestHandler(CallToolRequestSchema, async request => {
+						try {
+							const operation = surface.catalog.find(operation => operation.id === request.params.name);
+							if (!operation || !identity.scopes.includes(operation.scope)) throw new Error('Unknown tool or insufficient scope');
+							const args = request.params.arguments || {};
+							const run = () => TypeRelayMcp.call(api, request.params.name, args, surface.catalog);
+							const result = applyRateLimits ? await McpRateLimit.runToolWithLimits({ toolName: operation.upstream || operation.id, args, rateLimitKey, run }) : await run();
+							if (result?.isError) return result;
+							return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
+						} catch (error) { return { isError: true, content: [{ type: 'text', text: error.message }], ...(error.status === 401 ? { _meta: { 'mcp/www_authenticate': ['Bearer resource_metadata="' + metadata + '", error="invalid_token", error_description="Sign in to TypeRelay again"'] } } : {}) }; }
+					});
+					transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+					res.on('close', () => { transport?.close(); server?.close(); });
+					await server.connect(transport);
+					// JSON-only clients need not advertise SSE, matching Mailtwine.
+					req.headers.accept = 'application/json, text/event-stream';
+					await transport.handleRequest(req, res, req.body);
+				} catch (error) {
+					if (res.headersSent) return;
+					if (!error.status || error.status >= 500) recordException(error);
+					if (error.status === 401) res.set('WWW-Authenticate', 'Bearer resource_metadata="' + metadata + '"');
+					res.status(error.status || 500).json({ error: error.status ? error.message : 'MCP request failed' });
+				}
+			});
+			app.all(surface.path, (req, res) => res.set('Allow', 'POST').status(405).json({ error: 'Use POST with Streamable HTTP' }));
+		}
 		app.use((error, req, res, next) => { if (!error.status || error.status >= 500) recordException(error); res.status(error.status || 500).json({ error: error.status === 413 ? 'Request too large' : 'Invalid request' }); });
 		return app;
 	}
