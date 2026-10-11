@@ -105,3 +105,12 @@ test('MCP projects explicit result fields while preserving revisions, conflicts 
 	assert.deepEqual(TypeRelayMcp.response('get_asset_metadata', { id: 'asset', mime_type: 'image/png', size: 25, width: 1, height: 1, source_urls: ['https://private.example/image'], account: 'secret' }), { id: 'asset', mime_type: 'image/png', size: 25, width: 1, height: 1 });
 	assert.deepEqual(TypeRelayMcp.response('empty_trash', { affected: [{ id: 'snippet', type: 'snippet', library: 'library', revision: 4, account: 'secret' }], api_scope: 'trash:purge' }), { affected: [{ type: 'snippet', id: 'snippet', library: 'library', revision: 4 }] });
 });
+
+test('recovery, import and rich-text result contracts preserve only task fields', () => {
+	const content = { version: 2, type: 'rich_text', markdown: '![Logo](asset:abc)', text: 'Logo', assets: ['abc'], variables: { account: { label: 'Account' } }, internal: 'secret' };
+	assert.deepEqual(TypeRelayMcp.response('get_snippet', { id: 'rich', revision: 2, content, account: 'secret' }), { id: 'rich', revision: 2, content: { version: 2, type: 'rich_text', markdown: '![Logo](asset:abc)', text: 'Logo', assets: ['abc'], variables: { account: { label: 'Account' } } } });
+	assert.deepEqual(TypeRelayMcp.response('list_trash', { items: [{ type: 'snippet', id: 'one', library: 'lib', revision: 3, expires_at: '2026-11-01', can_restore: true, can_purge: false, account: 'secret', trashed_by: 'secret' }], next_cursor: null }), { items: [{ type: 'snippet', id: 'one', library: 'lib', revision: 3, expires_at: '2026-11-01', can_restore: true, can_purge: false }], next_cursor: null });
+	assert.deepEqual(TypeRelayMcp.response('commit_import', { libraries: [{ id: 'lib', revision: 1 }], import_summary: { imported: 1, skipped: ['Unsupported command'], renamed: [{ key: '0:0', title: 'Greeting', original: 'hello', trigger: 'hello-2', account: 'secret' }], internal: 'secret' } }), { libraries: [{ id: 'lib', revision: 1 }], import_summary: { imported: 1, skipped: ['Unsupported command'], renamed: [{ key: '0:0', title: 'Greeting', original: 'hello', trigger: 'hello-2' }] } });
+	assert.deepEqual(TypeRelayMcp.response('get_operation', { found: false, account: 'secret' }), { found: false });
+	assert.deepEqual(TypeRelayMcp.response('export_library', { yaml: 'matches: []', internal: 'secret' }), { yaml: 'matches: []' });
+});

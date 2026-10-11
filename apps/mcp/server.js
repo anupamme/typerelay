@@ -32,7 +32,7 @@ export class TypeRelayMcp {
 		update_snippet: 'Edit a saved TypeRelay snippet in an editable library using current library and snippet revisions. A stale edit may create a conflict; inspect returned conflict IDs before reporting success.',
 		batch_snippets: 'Move an explicit selection of snippets between editable TypeRelay libraries or move them to Trash atomically. Supply each snippet ID and revision; Trash retains items for up to 30 days.',
 		search_snippets: 'Search active snippets accessible to the connected TypeRelay account by text query. Returns matching content and IDs; page using next_cursor. Does not search other accounts or the public web.',
-		get_asset_metadata: 'Read metadata for a rich-text image referenced by accessible TypeRelay content. Returns image format, size and dimensions; does not download image bytes or fetch remote URLs.',
+		get_asset_metadata: 'Read metadata for a rich-text image by asset ID within the connected TypeRelay account. Returns image format, size and dimensions; does not download image bytes or fetch remote URLs.',
 		export_library: 'Export snippets from one accessible TypeRelay library as YAML. Rich text containing images requires the separate REST bundle export and cannot be exported with this tool.',
 		preview_import: 'Parse a supplied supported snippet export and preview entries, normalized abbreviations and warnings without saving any libraries or snippets. Use entry keys to select an import.',
 		commit_import: 'Import explicitly selected preview entry keys from a supplied snippet export into new private TypeRelay libraries. Existing libraries are not overwritten; inspect import_summary for renamed abbreviations and skipped entries.',

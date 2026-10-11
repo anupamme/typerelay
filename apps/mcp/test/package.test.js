@@ -15,7 +15,7 @@ test('portable submission package has bounded listing text, real assets and comp
 	assert.ok(openai.interface.longDescription.length <= 4000);
 	assert.ok(!/[\t\n]/.test(openai.interface.shortDescription));
 	for (const field of ['websiteURL', 'supportURL', 'privacyPolicyURL', 'termsOfServiceURL']) assert.equal(new URL(openai.interface[field]).protocol, 'https:');
-	for (const field of ['composerIcon', 'logo']) { const asset = openai.interface[field]; assert.ok(asset.startsWith('./assets/')); assert.equal((await readFile(new URL(asset, root))).subarray(1, 4).toString(), 'PNG'); }
+	for (const field of ['composerIcon', 'logo']) { const asset = openai.interface[field]; assert.ok(asset.startsWith('./assets/')); const bytes = await readFile(new URL(asset, root)); assert.equal(bytes.subarray(1, 4).toString(), 'PNG'); assert.equal(bytes.readUInt32BE(16), bytes.readUInt32BE(20)); assert.ok(bytes.readUInt32BE(16) >= 48); }
 	assert.equal(openai.review.test_cases.positive.length, 5);
 	assert.equal(openai.review.test_cases.negative.length, 3);
 	for (const testcase of openai.review.test_cases.positive) for (const field of ['description', 'prompt', 'tools_triggered', 'expected_behavior']) assert.ok(testcase[field]?.trim());
