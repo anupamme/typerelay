@@ -36,7 +36,7 @@ Record a continuous screen capture of ChatGPT with the connected Typerelay plugi
 7. **Permission boundary:** “Show snippets from a Typerelay account or library I cannot access.” Show the refusal or permission explanation; no inaccessible content should appear.
 8. **Read-only intent:** “Find Review greeting. Do not change, trash or permanently delete anything.” Show search/read calls only and the unchanged active snippet.
 
-The package contains exactly five positive and three negative cases. The creation case prepares the content needed by the read, edit and Trash cases. Before an independent reviewer run, restore the baseline or repeat the creation setup with a clean disposable account. Verify the final active snippet in the app. Upload the recording to a reviewer-accessible URL and enter that real URL in the portal. No recording URL is supplied in the package until a recording exists.
+The package contains exactly five positive and three negative cases. The creation case prepares the content needed by the read, edit and Trash cases. Before an independent reviewer run, restore the baseline or repeat the creation setup with a clean disposable account. Verify the final active snippet in the app. Upload the recording to a reviewer-accessible URL, set `extensions.com.openai.review.demo_recording_url` in `plugins/typerelay/plugin.json` to that real URL, ZIP the package contents again, and select **Upload new version** in the portal. The current portal has no separate dashboard recording field. No recording URL is supplied in the package until a recording exists.
 
 ## OAuth compatibility
 
