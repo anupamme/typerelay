@@ -37,7 +37,7 @@ struct PasteState {
     restore_space: bool,
     confirm_enter: bool,
     cursor: Option<typerelay_core::template::Cursor>,
-    cursor_deadline: Option<Instant>,
+    cursor_remaining: Option<usize>,
 }
 
 struct ContextWatch {
@@ -143,10 +143,13 @@ impl Session {
         *source=Some(incoming);engine.feed(Input::Cancel);*target=None;true
     }
 
+    fn resume_navigation_repeat(engine: &mut Engine, event: &InputEvent, pressed: &mut BTreeSet<u16>) -> InputEvent {
+        engine.feed(Input::Cancel);pressed.insert(event.code());InputEvent::new(EventType::KEY.0,event.code(),1)
+    }
     fn feed_input(engine: &mut Engine, event: &InputEvent, pressed: &BTreeSet<u16>, caps_control: bool, caps: &mut bool, allowed: bool) -> FeedResult {
         let code = KeyCode(event.code());
         if code == KeyCode::KEY_CAPSLOCK && event.value() == 1 && !caps_control { *caps = !*caps; }
-        if *caps || Self::modifiers_down(pressed, caps_control) || !allowed || (matches!(Self::input(code),Input::Right|Input::Space|Input::Enter) && event.value() == 2) { engine.feed(Input::Cancel); FeedResult::Forward } else { engine.feed_event(Self::input(code)) }
+        if *caps || Self::modifiers_down(pressed, caps_control) || !allowed || (matches!(Self::input(code),Input::Space|Input::Enter) && event.value() == 2) { engine.feed(Input::Cancel); FeedResult::Forward } else if code == KeyCode::KEY_RIGHT && event.value() == 2 { engine.feed_repeated_event(Self::input(code)) } else { engine.feed_event(Self::input(code)) }
     }
 
     fn interference_present(devices: &serde_json::Value) -> bool {
@@ -299,10 +302,11 @@ impl Session {
         let panel = typerelay_client::panel_ipc::PanelIpc::engine(running.clone())?;
         let progress=Arc::new(AtomicU64::new(0));let guarded=Arc::new(AtomicBool::new(true));Self::guard_relay(guarded.clone(),progress.clone());
         let mut input_generation = 0u64;
+        let cursor_discovery = Arc::new(AtomicBool::new(false));
         let result = Self::keep_connected(&running, &progress, || {
             input_generation = input_generation.wrapping_add(1);
             while let Ok(request) = panel.0.try_recv() { let _ = request.reply.send(Err("Keyboard reconnected; insertion cancelled".into())); }
-            Self::relay(&mut store, device_name, &running, &progress, &panel, &mut input_generation)
+            Self::relay(&mut store, device_name, &running, &progress, &panel, &mut input_generation, &cursor_discovery)
         });
         running.store(false, Ordering::SeqCst);
         guarded.store(false, Ordering::SeqCst);
@@ -327,7 +331,7 @@ impl Session {
         Ok(())
     }
 
-    fn relay(store: &mut DatabaseSnapshot, requested: &str, running: &AtomicBool, progress: &AtomicU64, panel: &(std::sync::mpsc::Receiver<typerelay_client::panel_ipc::Insertion>, std::sync::mpsc::SyncSender<typerelay_client::panel_ipc::Insertion>), input_generation: &mut u64) -> Result<()> {
+    fn relay(store: &mut DatabaseSnapshot, requested: &str, running: &AtomicBool, progress: &AtomicU64, panel: &(std::sync::mpsc::Receiver<typerelay_client::panel_ipc::Insertion>, std::sync::mpsc::SyncSender<typerelay_client::panel_ipc::Insertion>), input_generation: &mut u64, cursor_discovery: &Arc<AtomicBool>) -> Result<()> {
         let (panel_requests, template_tx) = panel;
         let devices = Hyprland::query("devices")?;
         Self::check_interference(&devices)?;
@@ -347,6 +351,7 @@ impl Session {
         engine.set_prefix(&settings.settings.trigger_prefix).map_err(anyhow::Error::msg)?;
         let mut pressed = BTreeSet::new();
         let mut suppressed = BTreeSet::<(u64,u16)>::new();
+        let mut suppressed_navigation = None;
         let mut template_wait: Option<TemplateWait> = None;
         let mut confirmation:Option<(String,u64)>=None;
         let mut panel_shortcut = typerelay_client::panel::Panel::settings(settings.config_dir()).ok().and_then(|value|typerelay_client::panel::Panel::shortcut(&value.shortcut).ok());
@@ -355,6 +360,7 @@ impl Session {
         let mut last_input = Instant::now();
         let mut caps = false;
         let mut buffered = VecDeque::new();
+        let mut cursor_backlog=false;
         let mut insertion = VecDeque::<Vec<InputEvent>>::new();
         let mut usage: Option<Expansion> = None;
         let mut last_stroke = Instant::now();
@@ -379,7 +385,8 @@ impl Session {
                 if message != last_health { if !message.is_empty() { eprintln!("{message}"); } else { eprintln!("Typerelay input ready: {} keyboards", active.len()); } last_health = message; }
                 last_conflict_check = Instant::now();
             }
-            let context_changed=context.changed(target.as_deref())?;if context.pointer_changed{capture.pointer();}
+            let watched_target=paste.as_ref().and_then(|state|state.target.as_deref()).or_else(||template_wait.as_ref().map(|wait|wait.target.as_str())).or_else(||confirmation.as_ref().map(|(target,_)|target.as_str())).or(target.as_deref());
+            let context_changed=context.changed(watched_target)?;if context.pointer_changed{capture.pointer();}
             if context_changed {*input_generation=input_generation.wrapping_add(1);}
             if context_changed || last_input.elapsed() > Duration::from_secs(10) {
                 engine.feed(Input::Cancel); target = None; insertion.clear(); usage = None;confirmation=None;
@@ -399,8 +406,9 @@ impl Session {
                 panel_shortcut = typerelay_client::panel::Panel::settings(settings.config_dir()).ok().and_then(|value|typerelay_client::panel::Panel::shortcut(&value.shortcut).ok());
                 last_reload = Instant::now();
             }
+            if buffered.is_empty(){cursor_backlog=false;}
             buffered.extend(keyboard.fetch_events(buffered.is_empty())?);
-            if buffered.len() > 8192 { bail!("Input backlog exceeded safety limit; stopping"); }
+            if buffered.len()>4096&&paste.as_ref().is_some_and(|state|state.cursor_remaining.is_some()){if let Some(mut state)=paste.take()&&let Some(reply)=state.reply.take(){let _=reply.send(Err("Text inserted; cursor positioning interrupted by buffered typing. Nothing retried".into()));}template_wait=None;engine.feed(Input::Cancel);target=None;cursor_backlog=true;}else if !cursor_backlog&&buffered.len() > 8192 { bail!("Input backlog exceeded safety limit; stopping"); }
             let keys_down = keyboard.keys_down()?;
             if keyboard.changed {
                 keyboard.changed = false; *input_generation = input_generation.wrapping_add(1);
@@ -413,7 +421,7 @@ impl Session {
                         capture.reset();engine.feed(Input::Cancel); last_input=Instant::now();
                         if let Some(wait)=&mut template_wait {wait.deadline=Instant::now()+Duration::from_secs(5);}
                         match request.step {
-							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{if payload.cursor.as_ref().is_some_and(|cursor|cursor.backward_graphemes>512){let _=request.reply.send(Err("This editor supports cursor positioning up to 512 characters from the end. Use Copy; nothing inserted".into()));continue;}let text=payload.plain.clone();let cursor=payload.cursor.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false,restore_space:false,confirm_enter:false,cursor,cursor_deadline:None});}
+							typerelay_client::clipboard_payload::ClipboardStep::Payload(payload) if !payload.plain.is_empty()||payload.html.is_some()=>{let text=payload.plain.clone();let cursor=payload.cursor.clone();paste=Some(PasteState{job:PasteJob::start_payload(payload),expansion:Expansion{identity:None,template:None,erase:request.erase,text},target:Some(request.target),reply:Some(request.reply),generation:*input_generation,started:false,sent:false,cancelled:false,restore_space:false,confirm_enter:false,cursor,cursor_remaining:None});}
                             step => {
                                 if let Some(wait)=&mut template_wait {wait.started=true;}
                                 for _ in 0..request.erase { output.emit(&Self::stroke(KeyCode::KEY_BACKSPACE,false))?; }
@@ -425,9 +433,11 @@ impl Session {
             }
 
             if let Some(state) = &mut paste {
-                if let Some(deadline)=state.cursor_deadline {
-                    if Instant::now()>=deadline||state.cancelled||state.generation!=*input_generation||Self::target()?!=state.target {insertion.clear();if let Some(reply)=state.reply.take(){let _=reply.send(Err("Text inserted; cursor positioning interrupted or expired. Nothing retried".into()));}paste=None;continue;}
-                    if insertion.is_empty(){if let Some(reply)=state.reply.take(){let _=reply.send(Ok(state.generation));}paste=None;continue;}
+                if let Some(remaining)=state.cursor_remaining {
+                    if state.cancelled||state.generation!=*input_generation||Self::target()?!=state.target {insertion.clear();if let Some(reply)=state.reply.take(){let _=reply.send(Err("Text inserted; cursor positioning interrupted. Nothing retried".into()));}paste=None;continue;}
+                    if remaining==0{if let Some(wait)=&mut template_wait{wait.deadline=Instant::now()+Duration::from_secs(5);}if let Some(reply)=state.reply.take(){let _=reply.send(Ok(state.generation));}paste=None;continue;}
+                    if last_stroke.elapsed()>=Duration::from_millis(2){for event in Self::stroke(KeyCode::KEY_LEFT,false){output.emit(&[event])?;}state.cursor_remaining=Some(remaining-1);last_stroke=Instant::now();last_input=Instant::now();}
+                    thread::sleep(Duration::from_millis(1));continue;
                 } else {
                 match state.job.progress.try_recv() {
                     Ok(Ok(Progress::Ready)) if !state.cancelled && Self::target()? == state.target && !context.changed(state.target.as_deref())? => {
@@ -438,7 +448,7 @@ impl Session {
                         state.started = true;
                     }
                     Ok(Ok(Progress::Ready)) => { state.cancelled = true; state.job.cancel(); }
-                    Ok(Ok(Progress::Finished)) => { if let Some(cursor)=state.cursor.take()&&state.sent&&!state.cancelled {insertion=(0..cursor.backward_graphemes).map(|_|Self::stroke(KeyCode::KEY_LEFT,false)).collect();state.cursor_deadline=Some(Instant::now()+Duration::from_secs(2));continue;} if state.confirm_enter&&state.sent&&!state.cancelled&&state.generation==*input_generation&&Self::target()?==state.target&&!context.changed(state.target.as_deref())? {output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?;} if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
+                    Ok(Ok(Progress::Finished)) => { if let Some(cursor)=state.cursor.take()&&state.sent&&!state.cancelled {if state.generation!=*input_generation||Self::target()?!=state.target {state.cancelled=true;} else {match Hyprland::position_cursor(state.target.as_deref().unwrap_or_default(),&state.expansion.text,cursor.utf16,cursor_discovery,||Ok(Self::target()?==state.target&&!context.changed(state.target.as_deref())?)) {Ok(true)=>{if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some(){eprintln!("Cursor positioned directly");}state.cursor_remaining=Some(0);continue;},Ok(false)=>{state.cursor_remaining=Some(cursor.backward_graphemes);continue;},Err(error)=>{eprintln!("Cursor positioning cancelled: {error:#}");state.cancelled=true;}}}} if state.confirm_enter&&state.sent&&!state.cancelled&&state.generation==*input_generation&&Self::target()?==state.target&&!context.changed(state.target.as_deref())? {output.emit(&Self::stroke(KeyCode::KEY_ENTER,false))?;} if state.sent && !state.cancelled && state.reply.is_none() { Self::record_usage(&state.expansion); } if let Some(reply) = state.reply.take() { let _ = reply.send(if state.sent && !state.cancelled { Ok(state.generation) } else { Err("Insertion cancelled; nothing retried".into()) }); } paste = None; continue; }
                     Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         eprintln!("Clipboard paste failed; no automatic retry");
                         if state.restore_space && state.reply.is_none() && !state.started && !state.cancelled && Self::target()? == state.target { for event in Self::stroke(KeyCode::KEY_SPACE, false) { output.emit(&[event])?; } }
@@ -485,7 +495,13 @@ impl Session {
                 let event = input.event;
                 let code = KeyCode(event.code());
                 let logical = keyboard.transition(&input);
-                if suppressed.contains(&(input.device,code.0)) { if event.value() == 0 { suppressed.remove(&(input.device,code.0)); if logical { pressed.remove(&code.0); capture.key(&event); } } continue; }
+                if suppressed.contains(&(input.device,code.0)) {
+                    if event.value() == 2 && suppressed_navigation == Some((input.device,code.0)) {
+                        suppressed.remove(&(input.device,code.0));suppressed_navigation=None;target=None;
+                        if logical { let down=Self::resume_navigation_repeat(&mut engine,&event,&mut pressed);capture.key(&down);output.emit(&[down])?; }
+                    } else if event.value() == 0 { suppressed.remove(&(input.device,code.0));if suppressed_navigation == Some((input.device,code.0)){suppressed_navigation=None;}if logical { pressed.remove(&code.0);capture.key(&event); } }
+                    continue;
+                }
                 if !logical { continue; }
                 if event.value() != 0 && Self::switch_keyboard(&mut source,input.device,&mut engine,&mut target) {
                     if let Some(name) = keyboard.name(input.device) {
@@ -507,7 +523,7 @@ impl Session {
                     if context.changed(target.as_deref())? { engine.feed(Input::Cancel); target = None; }
                     if matches!(Self::input(code), Input::Character(c) if c == engine.prefix()) { target = Self::target()?; if std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Candidate target available: {}", target.is_some()); } }
                     let result = Self::feed_input(&mut engine, &event, &pressed, caps_control, &mut caps, target.is_some());
-                    if matches!(result, FeedResult::Suppress) { suppressed.insert((input.device,code.0)); pressed.remove(&code.0); continue; }
+                    if matches!(result, FeedResult::Suppress) { suppressed.insert((input.device,code.0));suppressed_navigation=Some((input.device,code.0));pressed.remove(&code.0);continue; }
                     let matched_enter=matches!(Self::input(code),Input::Enter)&&matches!(result,FeedResult::Expand(_));
                     let expansion = if let FeedResult::Expand(expansion) = result { Some(expansion) } else { None };
                     if expansion.is_some() && std::env::var_os("TYPERELAY_DIAGNOSTIC").is_some() { eprintln!("Match found; held-key count {}", pressed.len()); }
@@ -536,7 +552,7 @@ impl Session {
                                 if code==KeyCode::KEY_SPACE {output.emit(&Self::stroke(KeyCode::KEY_SPACE,false))?;} target=None; continue;
                             }
                             if expansion.requires_paste() {
-                                paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:*input_generation, started: false, sent: false, cancelled: false, restore_space:code==KeyCode::KEY_SPACE,confirm_enter:matched_enter,cursor:None,cursor_deadline:None });
+                                paste = Some(PasteState { job: PasteJob::start(expansion.text.clone()), expansion, target: target.clone(), reply: None, generation:*input_generation, started: false, sent: false, cancelled: false, restore_space:code==KeyCode::KEY_SPACE,confirm_enter:matched_enter,cursor:None,cursor_remaining:None });
                             } else {
                                 insertion = Self::inject(&expansion, None)?; usage=Some(expansion);if matched_enter {confirmation=Some((destination,*input_generation));}
                             }
@@ -570,6 +586,25 @@ mod tests {
                 assert_eq!(matches!(result,FeedResult::Expand(_)),expands);
                 assert!(matches!(engine.feed_event(Input::Enter),FeedResult::Forward));
             }
+        }
+    }
+    #[test]
+    fn resumed_boundary_repeat_establishes_key_down_and_discards_candidate() {
+        let mut engine=Engine::new(typerelay_core::Snapshot::new(vec![typerelay_core::Snippet{trigger:"apr".into(),replacement:"Corrected".into()}]).unwrap());
+        for c in ";apr".chars(){engine.feed(Input::Character(c));}
+        let mut pressed=BTreeSet::new();let down=Session::resume_navigation_repeat(&mut engine,&InputEvent::new(EventType::KEY.0,KeyCode::KEY_RIGHT.0,2),&mut pressed);
+        assert_eq!(down,InputEvent::new(EventType::KEY.0,KeyCode::KEY_RIGHT.0,1));assert!(pressed.contains(&KeyCode::KEY_RIGHT.0));assert!(engine.feed(Input::Space).is_none());
+    }
+    #[test]
+    fn repeated_right_tracks_corrected_candidate_and_cancels_after_its_end() {
+        for beyond_end in [false,true] {
+            let mut engine=Engine::new(typerelay_core::Snapshot::new(vec![typerelay_core::Snippet{trigger:"apr".into(),replacement:"Corrected".into()}]).unwrap());
+            for c in ";xpr".chars(){engine.feed(Input::Character(c));}
+            for _ in 0..3{engine.feed(Input::Left);}
+            engine.feed(Input::Delete);engine.feed(Input::Character('a'));
+            for value in [1,2] { assert!(matches!(Session::feed_input(&mut engine,&InputEvent::new(EventType::KEY.0,KeyCode::KEY_RIGHT.0,value),&BTreeSet::new(),false,&mut false,true),FeedResult::Forward)); }
+            if beyond_end { assert!(matches!(Session::feed_input(&mut engine,&InputEvent::new(EventType::KEY.0,KeyCode::KEY_RIGHT.0,2),&BTreeSet::new(),false,&mut false,true),FeedResult::Forward)); }
+            assert_eq!(engine.feed(Input::Space).is_some(),!beyond_end);
         }
     }
     #[test]
