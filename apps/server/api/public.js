@@ -61,7 +61,9 @@ export class PublicApi {
 			const expected = Buffer.from(process.env.JWT_SECRET || 'change-me');
 			const supplied = Buffer.from(String(req.headers['x-mcp-secret'] || ''));
 			Support.assert(expected.length === supplied.length && timingSafeEqual(expected, supplied), 'Invalid MCP client', 401);
-			const ctx = await Auth.integration(req.headers.authorization, Auth.mcpResource());
+			const resource = req.body?.resource ?? Auth.mcpResource();
+			Support.assert([Auth.mcpResource(), Auth.mcpResource(true)].includes(resource), 'Invalid MCP resource', 401);
+			const ctx = await Auth.integration(req.headers.authorization, resource);
 			if (ctx.grant.kind === 'pat') return res.json({ access_token: req.headers.authorization.split(' ')[1], expires_in: 60 });
 			const token = Support.token();
 			await IntegrationToken.create({ hash: Support.hash(token), grant: ctx.credential, resource: Auth.apiResource(), expires: new Date(Date.now() + 60000) });

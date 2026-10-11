@@ -5,7 +5,7 @@ description: "Package, reviewer cases, recording script and deployment checks fo
 
 # OpenAI submission
 
-The portable package lives in `plugins/typerelay`. ZIP the contents of that directory with `plugin.json`, `mcp.json` and `assets/` at the ZIP root. Do not ZIP the repository, add credentials or include local environment files. The package uses the existing production endpoint `https://mcp.typerelay.com/mcp` and OAuth issuer `https://app.typerelay.com`. Deployments are performed by the operator.
+The portable package lives in `plugins/typerelay`. ZIP the contents of that directory with `plugin.json`, `mcp.json` and `assets/` at the ZIP root. Do not ZIP the repository, add credentials or include local environment files. The package uses the dedicated production endpoint `https://mcp.typerelay.com/mcp/app` and OAuth issuer `https://app.typerelay.com`. Deployments are performed by the operator.
 
 The existing portal draft is [Typerelay](https://platform.openai.com/plugins/manage/plugin_asdk_app_6acbf222dcec8191b6af1e12f8cb1553). Upload a new version after changing package metadata; inspect the saved authentication settings before connecting. DCR uses the existing discovery and registration endpoint. The manifest requests the four scopes needed by the content tools and contains no client secrets. The user enters reviewer credentials privately in the portal. An existing eligible account is required; no subscription checkout is available through the plugin.
 
@@ -17,9 +17,11 @@ Deploy the reviewed server/MCP release through the existing production process. 
 respond /.well-known/openai-apps-challenge "EnkJMf8o0lCqV5WF3PWW1VHe-5I8jUwAB3zvto0JDsI" 200
 ```
 
-This is a public domain challenge, not a credential. Validate and reload Caddy using the existing operator procedure. Verify that `https://mcp.typerelay.com/.well-known/openai-apps-challenge` returns that exact token, then select **Verify** in the portal. If the portal rotates the challenge, use its current value instead. Verify `/health`, OAuth protected-resource discovery at `/.well-known/oauth-protected-resource/mcp`, authorization-server discovery, and an authenticated connection and tool scan. Unauthenticated POST `/mcp` should return HTTP 401 with a resource metadata challenge; GET `/mcp` returns HTTP 405 by design.
+This is a public domain challenge, not a credential. Validate and reload Caddy using the existing operator procedure. Verify that `https://mcp.typerelay.com/.well-known/openai-apps-challenge` returns that exact token, then select **Verify** in the portal. If the portal rotates the challenge, use its current value instead. Verify `/health`, OAuth protected-resource discovery at `/.well-known/oauth-protected-resource/mcp/app`, authorization-server discovery, and an authenticated connection and tool scan. Unauthenticated POST `/mcp/app` should return HTTP 401 with a resource metadata challenge; GET `/mcp/app` returns HTTP 405 by design.
 
 Production verification is pending until the operator deploys. Never claim a local test proves the production service is updated.
+
+The `/mcp/app` surface accepts OAuth tokens issued for that exact resource. Existing `/mcp` OAuth grants cannot connect to it; reconnect both the portal scan account and reviewer connection after uploading the new package. `/mcp` retains its catalog and personal-token support; `/mcp/app` is OAuth-only. The app surface replaces action selectors with `move_snippets`, `trash_snippets`, `trash_item`, `restore_item` and `permanently_delete_trash_items`. Each tool fixes its action internally; callers cannot override it. Permanent deletion requires an explicit list of Trash items and revisions. Existing API permissions, scopes, operation IDs and revision conflicts still apply. Verify legacy `/mcp` discovery and health as well.
 
 ## Recording script and reviewer setup
 
@@ -31,7 +33,7 @@ Record a continuous screen capture of ChatGPT with the connected Typerelay plugi
 2. **Create content:** “Create a private Typerelay library named OpenAI Review and a plain text snippet titled Review greeting, abbreviation review-greeting, with text Hello from Typerelay.” Show the created library and snippet; additive writes follow the client's approval policy.
 3. **Read content:** “Find my Typerelay snippet with the abbreviation review-greeting and show its text.” Show the search result and saved snippet text.
 4. **Edit:** “In OpenAI Review, change Review greeting to Hello from my saved snippet.” Approve any client confirmation, show the current revisions and successful result, and confirm the saved text in the Typerelay app.
-5. **Trash and restore:** “Move Review greeting in OpenAI Review to Trash, then restore it.” Show the explicit item selection, client confirmations, Trash entry and restored active snippet. Do not purge it.
+5. **Trash and restore:** “Move Review greeting in OpenAI Review to Trash, then restore it.” Show the explicit item selection, `trash_item`, the Trash entry, `restore_item`, client confirmations and restored active snippet. Do not purge it.
 6. **Unsupported action:** “Use Typerelay to transfer $100 to another account.” Show the explanation that payment is unsupported and no mutation calls.
 7. **Permission boundary:** “Show snippets from a Typerelay account or library I cannot access.” Show the refusal or permission explanation; no inaccessible content should appear.
 8. **Read-only intent:** “Find Review greeting. Do not change, trash or permanently delete anything.” Show search/read calls only and the unchanged active snippet.

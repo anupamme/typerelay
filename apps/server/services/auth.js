@@ -151,7 +151,7 @@ export class Auth {
 	}
 	static scopes = scopes;
 	static apiResource() { return Auth.origin + '/api/v3'; }
-	static mcpResource() { return (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + '/mcp'; }
+	static mcpResource(app = false) { return (process.env.MCP_BASE_URL || 'http://localhost:3041').replace(/\/$/, '') + (app ? '/mcp/app' : '/mcp'); }
 	static mcpMetadata() { const resource = new URL(Auth.mcpResource()); return resource.origin + '/.well-known/oauth-protected-resource' + resource.pathname; }
 	static oauthConfig() { return { issuer: Auth.origin, authorization_endpoint: Auth.origin + '/integrations/authorize', token_endpoint: Auth.origin + '/integrations/token', registration_endpoint: Auth.origin + '/integrations/register', authorization_server_metadata_url: Auth.origin + '/.well-known/oauth-authorization-server', resource_metadata_url: Auth.mcpMetadata(), api_resource: Auth.apiResource(), mcp_endpoint: Auth.mcpResource(), client_registration: { dynamic_registration_supported: true, pre_registration_supported: true } }; }
 	static integrationScopes(scopes) {
@@ -168,7 +168,7 @@ export class Auth {
 		Support.assert(typeof header === 'string' && /^(Token|Bearer) [^ ]+$/.test(header), 'Integration authentication required', 401);
 		const token = header.split(' ')[1];
 		let grant;
-		if (token.startsWith('tr_pat_')) grant = await Integration.findOne({ hash: Support.hash(token), kind: 'pat', revoked: false, $or: [{ expires: { $gt: new Date() } }, { expires: { $type: 'null' } }] }).lean();
+		if (token.startsWith('tr_pat_') && resource !== Auth.mcpResource(true)) grant = await Integration.findOne({ hash: Support.hash(token), kind: 'pat', revoked: false, $or: [{ expires: { $gt: new Date() } }, { expires: { $type: 'null' } }] }).lean();
 		else {
 			const access = await IntegrationToken.findOne({ hash: Support.hash(token), resource, expires: { $gt: new Date() } }).lean();
 			if (access) grant = await Integration.findOne({ _id: access.grant, kind: 'oauth', revoked: false, expires: { $gt: new Date() } }).lean();
@@ -224,7 +224,7 @@ export class Auth {
 		Support.assert(client && client.redirects.includes(body.redirect_uri), 'Unregistered client or redirect');
 		Support.assert(body.response_type === 'code' && body.code_challenge_method === 'S256' && /^[A-Za-z0-9_-]{43}$/.test(body.code_challenge || ''), 'S256 PKCE required');
 		Support.assert(typeof body.state === 'string' && body.state.length >= 20 && Buffer.byteLength(body.state, 'utf8') <= 4096, 'Invalid state');
-		Support.assert([Auth.apiResource(), Auth.mcpResource()].includes(body.resource), 'Invalid resource');
+		Support.assert([Auth.apiResource(), Auth.mcpResource(), Auth.mcpResource(true)].includes(body.resource), 'Invalid resource');
 		const scopes = Auth.integrationScopes(typeof body.scope === 'string' ? body.scope.split(' ') : ['content:read']);
 		return { client, scopes };
 	}

@@ -69,7 +69,7 @@
             {
               "description": "Trash and restore safely",
               "prompt": "Move Review greeting in OpenAI Review to Trash, then restore it.",
-              "tools_triggered": "list_libraries, list_snippets, change_trash, list_trash",
+              "tools_triggered": "list_libraries, list_snippets, trash_item, restore_item, list_trash",
               "expected_behavior": "Use explicit IDs and revisions, restore the snippet, and leave it active without permanent deletion."
             }
           ],
@@ -92,7 +92,7 @@
         "commerce_description": "Typerelay tools manage snippets in an existing account and do not process payments or initiate subscriptions."
       },
       "publication": {
-        "release_notes": "Initial Typerelay plugin with account-scoped snippet search, library and snippet creation, updates, imports, conflict review and Trash management."
+        "release_notes": "Typerelay plugin with account-scoped snippet search, library and snippet creation, updates, imports, conflict review and Trash management. The dedicated OpenAI endpoint provides separate move, trash, restore and explicit permanent deletion tools with OAuth resource isolation."
       }
     }
   }

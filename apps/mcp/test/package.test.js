@@ -28,7 +28,7 @@ test('portable submission package has bounded listing text, real assets and comp
 	assert.equal(openai.hooks, undefined);
 	assert.deepEqual(Object.keys(mcp.mcpServers), ['typerelay']);
 	const server = mcp.mcpServers.typerelay;
-	assert.equal(server.type, 'streamable-http'); assert.equal(server.url, 'https://mcp.typerelay.com/mcp');
+	assert.equal(server.type, 'streamable-http'); assert.equal(server.url, 'https://mcp.typerelay.com/mcp/app');
 	assert.equal(server.extensions['com.openai'].auth.resource, server.url);
 	assert.deepEqual(server.extensions['com.openai'].auth.client, { mode: 'dcr' });
 	assert.equal(server.extensions['com.openai'].auth.oidcEnabled, false);

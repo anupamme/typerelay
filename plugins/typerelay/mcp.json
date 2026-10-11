@@ -3,7 +3,7 @@
   "mcpServers": {
     "typerelay": {
       "type": "streamable-http",
-      "url": "https://mcp.typerelay.com/mcp",
+      "url": "https://mcp.typerelay.com/mcp/app",
       "extensions": {
         "com.openai": {
           "auth": {
@@ -11,7 +11,7 @@
             "client": {
               "mode": "dcr"
             },
-            "resource": "https://mcp.typerelay.com/mcp",
+            "resource": "https://mcp.typerelay.com/mcp/app",
             "baseScopes": [
               "content:read"
             ],

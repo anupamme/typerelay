@@ -25,6 +25,8 @@ https://app.example.com/integrations/token
 
 Use the exact MCP endpoint, including `/mcp`, as the OAuth `resource` value. Compatible clients can register dynamically. Owners and admins can also pre-register public or `client_secret_post` clients under **Settings → Apps Access → OAuth**. Every OAuth client uses Authorization Code with S256 PKCE. MCP OAuth connections need at least `content:read`; requested scopes determine the available tools.
 
-For clients without OAuth, create a personal token under **Settings → Apps Access → Access Tokens** and supply it privately as `Authorization: Token <token>`. The permanent, full-scope secret is shown once. Account permissions still restrict every tool call.
+The dedicated OpenAI endpoint is `/mcp/app`, with protected-resource metadata at `/.well-known/oauth-protected-resource/mcp/app`. Use the full endpoint URL as the exact OAuth resource. It accepts only OAuth tokens for that resource; reconnect when switching from `/mcp`. Its fixed-action tool catalog is described in [Tools](./tools). The legacy `/mcp` catalog and credentials remain supported.
+
+For clients without OAuth on `/mcp`, create a personal token under **Settings → Apps Access → Access Tokens** and supply it privately as `Authorization: Token <token>`. The permanent, full-scope secret is shown once. Account permissions still restrict every tool call.
 
 Revoke a personal token or authorized app from **Settings → Apps Access**. Revocation stops new MCP calls immediately. Deleting a pre-registered client revokes all of its account grants. See [API authentication](../api/authentication) for scopes, token lifetimes and the API discovery endpoint.
