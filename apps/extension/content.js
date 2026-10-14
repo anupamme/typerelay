@@ -56,7 +56,6 @@ async function notice(message) {
 		panel.className = 'notice';
 		panel.setAttribute('role', 'alert');
 		const text = document.createElement('span');
-		text.setAttribute('data-message', '');
 		text.textContent = message;
 		panel.append(text);
 		shadow.append(style, panel);
