@@ -29,7 +29,7 @@ async function fixture(message, { failFetch = false } = {}) {
 	window.eval(readFileSync(new URL('../content.js', import.meta.url), 'utf8'));
 	await tick();
 	const editor = document.querySelector('textarea');
-	editor.value = ';brb'; editor.focus(); editor.setSelectionRange(1, 3);
+	editor.value = ';brb'; editor.focus(); editor.setSelectionRange(4, 4);
 	await tick();
 	return { window, document, editor, timers, shadow: () => shadow, trigger: async () => { handlers.keydown({ key: 'Enter', target: editor, isTrusted: true, preventDefault() {}, stopImmediatePropagation() {} }); await tick(); await tick(); await tick(); } };
 }
@@ -77,8 +77,8 @@ test('notice does not move focus or change selection', async () => {
 		await f.trigger();
 		assert.ok(f.shadow().querySelector('.notice'));
 		assert.equal(f.document.activeElement, f.editor);
-		assert.equal(f.editor.selectionStart, 1);
-		assert.equal(f.editor.selectionEnd, 3);
+		assert.equal(f.editor.selectionStart, 4);
+		assert.equal(f.editor.selectionEnd, 4);
 	} finally { f.window.close(); }
 });
 
